@@ -84,7 +84,7 @@ int main(int argc, char *argv[])
     if (!check(argc, argv, &port))
         return 1;
 
-    device = device_from_ip(argv[1]);
+    device = (argc == 5) ? argv[4] : device_from_ip(argv[1]);
     if (device == NULL) {
         fprintf(stderr, "找不到源 IP %s 对应的网卡，请手动指定\n", argv[1]);
         return 1;
@@ -102,7 +102,14 @@ int main(int argc, char *argv[])
      * 这样目标响应再快，报文也已经进入抓包缓冲区，不会漏掉。
      */
     handle = sniff_init(device, filter);
+    if (handle == NULL)
+        return 1;
+
     net = send_init();
+    if (net == NULL) {
+        pcap_close(handle);
+        return 1;
+    }
 
     str2addr(net, &src, &dst, argv);
     make_packet(net, src, dst, port);

@@ -36,19 +36,34 @@ pcap_t *sniff_init(const char *device, const char *filter_exp){
     char errbuf[PCAP_ERRBUF_SIZE];
     struct bpf_program fp;
     pcap_t *handle = pcap_open_live(device, SNAP_LEN, 0, READ_TIMEOUT_MS, errbuf);
+
+    if (handle == NULL) {
+        fprintf(stderr, "pcap_open_live(%s): %s\n", device, errbuf);
+        return NULL;
+    }
+
     /* 设置过滤器 */
-    if (pcap_compile(handle, &fp, filter_exp, 0, PCAP_NETMASK_UNKNOWN) == -1) goto error;
-    if (pcap_setfilter(handle, &fp) != 0) goto error;
+    if (pcap_compile(handle, &fp, filter_exp, 0, PCAP_NETMASK_UNKNOWN) == -1) {
+        fprintf(stderr, "pcap_compile: %s\n", pcap_geterr(handle));
+        pcap_close(handle);
+        return NULL;
+    }
+    if (pcap_setfilter(handle, &fp) != 0) {
+        fprintf(stderr, "pcap_setfilter: %s\n", pcap_geterr(handle));
+        pcap_freecode(&fp);
+        pcap_close(handle);
+        return NULL;
+    }
+    pcap_freecode(&fp);
+
     /* 非阻塞读取，配合下面的简单轮询实现超时 */
-    if (pcap_setnonblock(handle, 1, errbuf) == -1) goto error;
+    if (pcap_setnonblock(handle, 1, errbuf) == -1) {
+        fprintf(stderr, "pcap_setnonblock: %s\n", errbuf);
+        pcap_close(handle);
+        return NULL;
+    }
 
-    pcap_freecode(&fp);
     return handle;
-
-error:
-    pcap_freecode(&fp);
-    pcap_close(handle);
-    return NULL;
 }
 
 int sniff_packet(pcap_t *handle)
@@ -58,10 +73,19 @@ int sniff_packet(pcap_t *handle)
     while (time(NULL) < deadline) {
         struct pcap_pkthdr *header;
         const u_char *packet;
-        if(pcap_next_ex(handle, &header, &packet)){
+        int rc = pcap_next_ex(handle, &header, &packet);
+
+        if (rc == 1) {
             got_packet(header, packet);
             return 0;
         }
+        if (rc == -1) {
+            fprintf(stderr, "pcap_next_ex: %s\n", pcap_geterr(handle));
+            return -1;
+        }
+        if (rc == -2)
+            break;
+
         usleep(10000);  /* 没有报文时等 10 ms，避免忙等 */
     }
     printf("超时：没有收到响应\n");
